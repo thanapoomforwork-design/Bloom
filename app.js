@@ -3,6 +3,8 @@
 
   const app = document.getElementById('app');
 
+  const MAX_UPLOAD_IMAGES = 6;
+
   const categories = [
     'ร้านอาหาร', 'คาเฟ่/เครื่องดื่ม', 'เบเกอรี่/ขนมหวาน', 'เครื่องประดับ/จิวเวลรี่',
     'แฟชั่น/เสื้อผ้า', 'ความงาม/สกินแคร์', 'ของแฮนด์เมด/DIY', 'ฟิตเนส/สุขภาพ',
@@ -15,7 +17,7 @@
     category: '',
     shopLink: '',
     showValidation: false,
-    uploadDataUrl: null,
+    uploadImages: [],
     weeks: null,
     selectedIdea: null,
   };
@@ -434,13 +436,26 @@
             ${state.showValidation && !state.category.trim() ? '<div class="field-error">กรุณาเลือกประเภทร้าน</div>' : ''}
           </div>
           <div class="field">
-            <label>3. แนบรูป/ผลงานคอนเทนต์เก่า (ถ้ามี)</label>
-            <div class="upload-box${state.uploadDataUrl ? ' filled' : ''}" id="uploadBox" tabindex="0" role="button" aria-label="แนบรูปคอนเทนต์เก่า">
-              <div class="upload-placeholder">ลากรูปคอนเทนต์เก่ามาวางที่นี่ เพื่อให้ AI วิเคราะห์สไตล์เดิม</div>
-              <img class="upload-preview" alt="ตัวอย่างรูปที่แนบ" src="${state.uploadDataUrl || ''}" />
-              <button type="button" class="upload-clear" id="uploadClear">ลบรูป</button>
-              <input type="file" accept="image/png,image/jpeg,image/webp,image/avif" id="uploadInput" hidden />
-            </div>
+            <label>3. แนบรูป/ผลงานคอนเทนต์เก่า (ถ้ามี ใส่ได้หลายรูป สูงสุด ${MAX_UPLOAD_IMAGES} รูป)</label>
+            ${state.uploadImages.length === 0 ? `
+              <div class="upload-box" id="uploadBox" tabindex="0" role="button" aria-label="แนบรูปคอนเทนต์เก่า">
+                <div class="upload-placeholder">ลากรูปคอนเทนต์เก่ามาวางที่นี่ (เลือกได้หลายรูป) เพื่อให้ AI วิเคราะห์สไตล์เดิม</div>
+                <input type="file" accept="image/png,image/jpeg,image/webp,image/avif" id="uploadInput" multiple hidden />
+              </div>
+            ` : `
+              <div class="upload-grid" id="uploadGrid">
+                ${state.uploadImages.map((src, i) => `
+                  <div class="upload-thumb">
+                    <img src="${src}" alt="รูปที่แนบ ${i + 1}" />
+                    <button type="button" class="upload-thumb-remove" data-idx="${i}" aria-label="ลบรูปนี้">✕</button>
+                  </div>
+                `).join('')}
+                ${state.uploadImages.length < MAX_UPLOAD_IMAGES ? `
+                  <div class="upload-add-tile" id="uploadAddTile" tabindex="0" role="button" aria-label="เพิ่มรูป">+</div>
+                ` : ''}
+              </div>
+              <input type="file" accept="image/png,image/jpeg,image/webp,image/avif" id="uploadInput" multiple hidden />
+            `}
           </div>
           <div class="field">
             <label for="shopLink">4. ลิงก์ร้านค้า (เพจ/เว็บไซต์/โซเชียล) — ถ้ามี</label>
@@ -463,55 +478,70 @@
     shopLinkInput.value = state.shopLink;
     shopLinkInput.addEventListener('input', (e) => { state.shopLink = e.target.value; });
 
-    const uploadBox = wrap.querySelector('#uploadBox');
     const uploadInput = wrap.querySelector('#uploadInput');
-    const uploadClear = wrap.querySelector('#uploadClear');
+    const dropZone = wrap.querySelector('#uploadBox') || wrap.querySelector('#uploadGrid');
 
     const openPicker = () => uploadInput.click();
-    uploadBox.addEventListener('click', (e) => {
-      if (e.target === uploadClear) return;
-      openPicker();
-    });
-    uploadBox.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openPicker(); }
+
+    if (wrap.querySelector('#uploadBox')) {
+      const uploadBox = wrap.querySelector('#uploadBox');
+      uploadBox.addEventListener('click', openPicker);
+      uploadBox.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openPicker(); }
+      });
+    }
+
+    const addTile = wrap.querySelector('#uploadAddTile');
+    if (addTile) {
+      addTile.addEventListener('click', openPicker);
+      addTile.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openPicker(); }
+      });
+    }
+
+    wrap.querySelectorAll('.upload-thumb-remove').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const idx = Number(btn.getAttribute('data-idx'));
+        state.uploadImages.splice(idx, 1);
+        render();
+      });
     });
 
     uploadInput.addEventListener('change', () => {
-      const f = uploadInput.files && uploadInput.files[0];
-      if (f) ingestImage(f);
+      ingestFiles(uploadInput.files);
     });
 
-    ['dragenter', 'dragover'].forEach(evt => {
-      uploadBox.addEventListener(evt, (e) => {
-        e.preventDefault();
-        uploadBox.classList.add('drag-over');
+    if (dropZone) {
+      ['dragenter', 'dragover'].forEach(evt => {
+        dropZone.addEventListener(evt, (e) => {
+          e.preventDefault();
+          dropZone.classList.add('drag-over');
+        });
       });
-    });
-    ['dragleave', 'drop'].forEach(evt => {
-      uploadBox.addEventListener(evt, (e) => {
-        e.preventDefault();
-        uploadBox.classList.remove('drag-over');
+      ['dragleave', 'drop'].forEach(evt => {
+        dropZone.addEventListener(evt, (e) => {
+          e.preventDefault();
+          dropZone.classList.remove('drag-over');
+        });
       });
-    });
-    uploadBox.addEventListener('drop', (e) => {
-      const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
-      if (f) ingestImage(f);
-    });
+      dropZone.addEventListener('drop', (e) => {
+        ingestFiles(e.dataTransfer && e.dataTransfer.files);
+      });
+    }
 
-    uploadClear.addEventListener('click', (e) => {
-      e.stopPropagation();
-      state.uploadDataUrl = null;
-      render();
-    });
-
-    function ingestImage(file) {
-      if (!/^image\/(png|jpeg|webp|avif)$/.test(file.type)) return;
-      const reader = new FileReader();
-      reader.onload = () => {
-        state.uploadDataUrl = reader.result;
-        render();
-      };
-      reader.readAsDataURL(file);
+    function ingestFiles(fileList) {
+      const files = Array.from(fileList || []).filter(f => /^image\/(png|jpeg|webp|avif)$/.test(f.type));
+      const room = MAX_UPLOAD_IMAGES - state.uploadImages.length;
+      files.slice(0, Math.max(0, room)).forEach(file => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          if (state.uploadImages.length >= MAX_UPLOAD_IMAGES) return;
+          state.uploadImages.push(reader.result);
+          render();
+        };
+        reader.readAsDataURL(file);
+      });
     }
 
     wrap.querySelector('#submitBtn').addEventListener('click', handleSubmit);
