@@ -20,6 +20,8 @@
     uploadImages: [],
     weeks: null,
     selectedIdea: null,
+    analysis: null,
+    analysisError: null,
   };
 
   function escapeHtml(str) {
@@ -530,18 +532,19 @@
       });
     }
 
-    function ingestFiles(fileList) {
+    async function ingestFiles(fileList) {
       const files = Array.from(fileList || []).filter(f => /^image\/(png|jpeg|webp|avif)$/.test(f.type));
       const room = MAX_UPLOAD_IMAGES - state.uploadImages.length;
-      files.slice(0, Math.max(0, room)).forEach(file => {
-        const reader = new FileReader();
-        reader.onload = () => {
-          if (state.uploadImages.length >= MAX_UPLOAD_IMAGES) return;
-          state.uploadImages.push(reader.result);
+      for (const file of files.slice(0, Math.max(0, room))) {
+        try {
+          const dataUrl = await resizeImageFile(file, 1024);
+          if (state.uploadImages.length >= MAX_UPLOAD_IMAGES) break;
+          state.uploadImages.push(dataUrl);
           render();
-        };
-        reader.readAsDataURL(file);
-      });
+        } catch (e) {
+          console.warn('image resize failed', e);
+        }
+      }
     }
 
     wrap.querySelector('#submitBtn').addEventListener('click', handleSubmit);
@@ -549,7 +552,26 @@
     return wrap;
   }
 
-  function handleSubmit() {
+  // Downscales to a max dimension and re-encodes as JPEG so the analyze API
+  // payload (and Claude vision token cost) stays small regardless of the
+  // original photo's resolution.
+  async function resizeImageFile(file, maxDim) {
+    const bitmap = await createImageBitmap(file);
+    try {
+      const scale = Math.min(1, maxDim / Math.max(bitmap.width, bitmap.height));
+      const w = Math.max(1, Math.round(bitmap.width * scale));
+      const h = Math.max(1, Math.round(bitmap.height * scale));
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      canvas.getContext('2d').drawImage(bitmap, 0, 0, w, h);
+      return canvas.toDataURL('image/jpeg', 0.82);
+    } finally {
+      bitmap.close && bitmap.close();
+    }
+  }
+
+  async function handleSubmit() {
     if (!state.shopName.trim() || !state.category.trim()) {
       state.showValidation = true;
       render();
@@ -557,20 +579,47 @@
     }
     state.showValidation = false;
     state.screen = 'analyzing';
+    state.analysisError = null;
     render();
-    setTimeout(() => {
-      state.weeks = generatePlan(state.shopName.trim(), state.category.trim());
-      state.screen = 'result';
-      render();
-    }, 1200);
+
+    const shopName = state.shopName.trim();
+    const category = state.category.trim();
+
+    try {
+      const res = await fetch('/api/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          shopName, category,
+          shopLink: state.shopLink.trim(),
+          images: state.uploadImages,
+        }),
+      });
+      let data;
+      try {
+        data = await res.json();
+      } catch {
+        throw new Error('ยังไม่พบ backend /api/analyze — ฟีเจอร์นี้ต้อง deploy ผ่าน Vercel (ไม่ใช่ GitHub Pages) พร้อมตั้งค่า GEMINI_API_KEY ก่อนถึงจะใช้งานได้');
+      }
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      state.analysis = data;
+      state.analysisError = null;
+    } catch (err) {
+      state.analysis = null;
+      state.analysisError = err && err.message ? err.message : String(err);
+    }
+
+    state.weeks = generatePlan(shopName, category);
+    state.screen = 'result';
+    render();
   }
 
   function renderAnalyzing() {
     return el(`
       <div class="screen-analyzing">
         <div class="spinner"></div>
-        <div class="analyzing-title">กำลังวิเคราะห์ข้อมูลร้าน "${escapeHtml(state.shopName)}"...</div>
-        <div class="analyzing-sub">กำลังวางแผนคอนเทนต์ตั้งแต่เริ่มต้นจนช่องเติบโต 🌱</div>
+        <div class="analyzing-title">AI กำลังวิเคราะห์รูปและข้อมูลร้าน "${escapeHtml(state.shopName)}"...</div>
+        <div class="analyzing-sub">เจ้าแห่งการตลาดคอนเทนต์กำลังดูรูป+ลิงก์ร้านจริง แล้ววางแผนคอนเทนต์ให้ 🌱</div>
       </div>
     `);
   }
@@ -582,6 +631,42 @@
     } catch {
       return '';
     }
+  }
+
+  function renderAnalysisSection() {
+    if (state.analysisError) {
+      return `
+        <div class="analysis-card analysis-error-card">
+          <div class="analysis-title">⚠️ วิเคราะห์ด้วย AI ไม่สำเร็จ</div>
+          <div class="analysis-error-text">${escapeHtml(state.analysisError)}</div>
+          <button type="button" class="pill-btn" id="retryAnalysisBtn">ลองวิเคราะห์อีกครั้ง</button>
+        </div>
+      `;
+    }
+    const a = state.analysis;
+    if (!a) return '';
+    return `
+      <div class="analysis-card">
+        <div class="analysis-title">🔎 วิเคราะห์คอนเทนต์ปัจจุบันของร้าน โดยเจ้าแห่งการตลาดคอนเทนต์ (AI)</div>
+        ${a.overallAssessment ? `<div class="analysis-summary">${escapeHtml(a.overallAssessment)}</div>` : ''}
+        <div class="analysis-grid">
+          <div class="analysis-col analysis-col-good">
+            <div class="analysis-col-title">✅ ข้อดี</div>
+            <ul>${a.strengths.map(s => `<li>${escapeHtml(s)}</li>`).join('')}</ul>
+          </div>
+          <div class="analysis-col analysis-col-bad">
+            <div class="analysis-col-title">⚠️ ข้อเสีย/สิ่งที่ควรปรับปรุง</div>
+            <ul>${a.weaknesses.map(s => `<li>${escapeHtml(s)}</li>`).join('')}</ul>
+          </div>
+        </div>
+        ${a.recommendations.length ? `
+          <div class="analysis-reco">
+            <div class="analysis-col-title">💡 คำแนะนำจากผู้เชี่ยวชาญ</div>
+            <ul>${a.recommendations.map(s => `<li>${escapeHtml(s)}</li>`).join('')}</ul>
+          </div>
+        ` : ''}
+      </div>
+    `;
   }
 
   function renderResult() {
@@ -597,9 +682,13 @@
           </div>
           <button type="button" class="pill-btn" id="backToFormBtn">← แก้ไขข้อมูลร้าน</button>
         </div>
+        ${renderAnalysisSection()}
         <div class="weeks" id="weeksWrap"></div>
       </div>
     `);
+
+    const retryBtn = wrap.querySelector('#retryAnalysisBtn');
+    if (retryBtn) retryBtn.addEventListener('click', handleSubmit);
 
     wrap.querySelector('#backToFormBtn').addEventListener('click', () => {
       state.screen = 'form';
