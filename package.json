@@ -1,0 +1,9 @@
+{
+  "name": "content-bloom",
+  "version": "1.0.0",
+  "private": true,
+  "description": "ContentBloom — เว็บวางแผนคอนเทนต์ให้ช่องเติบโต",
+  "engines": {
+    "node": ">=18"
+  }
+}

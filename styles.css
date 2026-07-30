@@ -339,6 +339,99 @@ body {
   cursor: pointer;
 }
 
+.analysis-card {
+  margin-top: 28px;
+  background: #fff;
+  border-radius: 24px;
+  padding: 24px;
+  box-shadow: 0 8px 24px rgba(255, 111, 156, 0.16);
+}
+
+.analysis-title {
+  font-size: 17px;
+  font-weight: 600;
+  font-family: 'Mitr', sans-serif;
+  color: #e8467a;
+  margin-bottom: 12px;
+}
+
+.analysis-summary {
+  font-size: 14px;
+  color: #4a2338;
+  line-height: 1.6;
+  background: #fff8fb;
+  border-radius: 14px;
+  padding: 12px 16px;
+  margin-bottom: 18px;
+}
+
+.analysis-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.analysis-col {
+  border-radius: 16px;
+  padding: 14px 16px;
+}
+
+.analysis-col-good {
+  background: #f3fbf1;
+}
+
+.analysis-col-bad {
+  background: #fff5f2;
+}
+
+.analysis-col-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #7a3b54;
+  margin-bottom: 8px;
+}
+
+.analysis-col ul,
+.analysis-reco ul {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.analysis-col li,
+.analysis-reco li {
+  font-size: 13px;
+  color: #4a2338;
+  line-height: 1.5;
+}
+
+.analysis-reco {
+  margin-top: 16px;
+  background: #fff0f5;
+  border-radius: 16px;
+  padding: 14px 16px;
+}
+
+.analysis-error-card {
+  border: 2px solid #ffb8d1;
+}
+
+.analysis-error-text {
+  font-size: 13px;
+  color: #9c6b7f;
+  line-height: 1.5;
+  margin-bottom: 14px;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 560px) {
+  .analysis-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .weeks {
   margin-top: 36px;
   display: flex;
@@ -533,6 +626,12 @@ body {
   font-family: 'Mitr', sans-serif;
   color: #7a3b54;
   margin: 0 0 14px;
+}
+
+.section-note {
+  font-size: 12px;
+  color: #b06682;
+  margin: -8px 0 12px;
 }
 
 .steps-list {
