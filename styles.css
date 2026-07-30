@@ -278,6 +278,22 @@ body {
   margin-top: 4px;
 }
 
+.result-head .result-link {
+  margin-top: 6px;
+  font-size: 13px;
+}
+
+.result-head .result-link a {
+  color: #e8467a;
+  font-weight: 500;
+  text-decoration: none;
+  word-break: break-all;
+}
+
+.result-head .result-link a:hover {
+  text-decoration: underline;
+}
+
 .pill-btn {
   padding: 10px 20px;
   border-radius: 999px;
@@ -378,6 +394,15 @@ body {
   gap: 6px;
 }
 
+.tag-day {
+  font-size: 11px;
+  background: #f7d9e4;
+  color: #7a3b54;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-weight: 600;
+}
+
 .tag-format {
   font-size: 11px;
   background: #ffe6ef;
@@ -427,6 +452,15 @@ body {
   display: flex;
   gap: 8px;
   margin-bottom: 10px;
+}
+
+.badge-day {
+  font-size: 12px;
+  background: #f7d9e4;
+  color: #7a3b54;
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-weight: 600;
 }
 
 .badge-format {
