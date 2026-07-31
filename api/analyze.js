@@ -6,7 +6,7 @@
 // get a free key at https://aistudio.google.com/apikey. Never hardcode it
 // here or expose it to the browser.
 
-const GEMINI_MODEL = 'gemini-2.5-flash';
+const GEMINI_MODEL = 'gemini-flash-latest';
 const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 const MAX_IMAGES = 6;
 const MAX_LINK_FETCH_BYTES = 300000;
