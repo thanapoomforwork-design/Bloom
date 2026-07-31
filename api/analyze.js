@@ -108,7 +108,7 @@ module.exports = async function handler(req, res) {
     try {
       const out = await callGemini(key, {
         contents: [{ role: 'user', parts: [{ text: 'ping' }] }],
-        generationConfig: { maxOutputTokens: 8, thinkingConfig: { thinkingBudget: 0 } },
+        generationConfig: { maxOutputTokens: 200 },
       }, 15000);
       keyWorks = !out.failed;
       authMode = out.mode;
@@ -195,7 +195,7 @@ module.exports = async function handler(req, res) {
       contents: [{ role: 'user', parts }],
       generationConfig: {
         responseMimeType: 'application/json',
-        maxOutputTokens: 4096,
+        maxOutputTokens: 8192,
         temperature: 0.7,
         // gemini-2.5-flash spends output tokens on internal reasoning by
         // default; left on, the budget is consumed before any answer is
