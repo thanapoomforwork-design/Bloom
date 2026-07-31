@@ -10,6 +10,10 @@ const GEMINI_MODEL = 'gemini-2.5-flash';
 const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 const MAX_IMAGES = 6;
 const MAX_LINK_FETCH_BYTES = 300000;
+// Kept short on purpose: many social sites (TikTok/IG) stall bot requests, and
+// this fetch shares the same function timeout budget as the Gemini call.
+const LINK_FETCH_TIMEOUT_MS = 3000;
+const GEMINI_TIMEOUT_MS = 45000;
 
 function extractMeta(html) {
   const pick = (re) => {
@@ -31,7 +35,7 @@ async function fetchLinkMeta(url) {
     if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
     const res = await fetch(u.href, {
       redirect: 'follow',
-      signal: AbortSignal.timeout(8000),
+      signal: AbortSignal.timeout(LINK_FETCH_TIMEOUT_MS),
       headers: { 'User-Agent': 'Mozilla/5.0 (compatible; ContentBloomBot/1.0)' },
     });
     if (!res.ok) return null;
@@ -50,6 +54,26 @@ function dataUrlToInlinePart(dataUrl) {
 }
 
 module.exports = async function handler(req, res) {
+  // Opening this URL in a browser (a GET) reports whether the function is
+  // deployed and whether the key is configured — without revealing the key.
+  if (req.method === 'GET') {
+    const key = process.env.GEMINI_API_KEY || '';
+    res.status(200).json({
+      ok: true,
+      message: 'backend ทำงานปกติ ✅',
+      model: GEMINI_MODEL,
+      hasApiKey: !!key,
+      apiKeyLooksValid: key.startsWith('AIza'),
+      apiKeyLength: key.length,
+      hint: !key
+        ? 'ยังไม่ได้ตั้ง GEMINI_API_KEY ใน Vercel → Settings → Environment Variables แล้วต้อง Redeploy'
+        : key.startsWith('AIza')
+          ? 'ตั้งค่าครบแล้ว พร้อมใช้งาน'
+          : 'มี key แต่รูปแบบไม่ใช่ของ Gemini (ต้องขึ้นต้นด้วย AIza) — ขอใหม่ที่ aistudio.google.com/apikey',
+    });
+    return;
+  }
+
   if (req.method !== 'POST') {
     res.status(405).json({ error: 'Method not allowed' });
     return;
@@ -109,24 +133,56 @@ module.exports = async function handler(req, res) {
     apiRes = await fetch(`${GEMINI_API_URL}?key=${encodeURIComponent(apiKey)}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
+      signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
       body: JSON.stringify({
         contents: [{ role: 'user', parts }],
-        generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 1500 },
+        generationConfig: {
+          responseMimeType: 'application/json',
+          maxOutputTokens: 4096,
+          temperature: 0.7,
+          // gemini-2.5-flash spends output tokens on internal reasoning by
+          // default; left on, the budget is consumed before any answer is
+          // emitted and the response comes back empty.
+          thinkingConfig: { thinkingBudget: 0 },
+        },
       }),
     });
   } catch (e) {
-    res.status(502).json({ error: 'เรียก Gemini API ไม่สำเร็จ: ' + (e && e.message ? e.message : String(e)) });
+    const msg = e && e.message ? e.message : String(e);
+    res.status(502).json({ error: `เรียก Gemini API ไม่สำเร็จ: ${msg}${/timeout|abort/i.test(msg) ? ' (หมดเวลา — ลองลดจำนวนรูปที่แนบลง)' : ''}` });
     return;
   }
 
   if (!apiRes.ok) {
     const errText = await apiRes.text().catch(() => '');
-    res.status(502).json({ error: `Gemini API error (${apiRes.status}): ${errText.slice(0, 300)}` });
+    let hint = '';
+    if (apiRes.status === 400 && /API key not valid/i.test(errText)) {
+      hint = ' — API key ไม่ถูกต้อง ตรวจว่าเป็น key จาก aistudio.google.com (ขึ้นต้นด้วย AIza)';
+    } else if (apiRes.status === 403) {
+      hint = ' — key ไม่มีสิทธิ์ใช้ Gemini API ลองสร้าง key ใหม่';
+    } else if (apiRes.status === 429) {
+      hint = ' — ใช้เกินโควตาฟรีชั่วคราว รอสักครู่แล้วลองใหม่';
+    } else if (apiRes.status === 404) {
+      hint = ` — ไม่พบโมเดล ${GEMINI_MODEL}`;
+    }
+    res.status(502).json({ error: `Gemini API error (${apiRes.status})${hint}: ${errText.slice(0, 200)}` });
     return;
   }
 
   const data = await apiRes.json();
-  const text = (data?.candidates?.[0]?.content?.parts || []).map((p) => p.text || '').join('');
+  const candidate = data?.candidates?.[0];
+  const text = (candidate?.content?.parts || []).map((p) => p.text || '').join('');
+  const finishReason = candidate?.finishReason || '';
+
+  if (!text.trim()) {
+    const why = finishReason === 'MAX_TOKENS'
+      ? 'คำตอบยาวเกินโควตา token'
+      : finishReason === 'SAFETY'
+        ? 'ถูกระบบกรองเนื้อหาบล็อก ลองเปลี่ยนรูปที่แนบ'
+        : `finishReason=${finishReason || 'ไม่ทราบ'}`;
+    res.status(502).json({ error: `AI ไม่ได้ส่งข้อความกลับมา (${why})` });
+    return;
+  }
 
   let parsed;
   try {
