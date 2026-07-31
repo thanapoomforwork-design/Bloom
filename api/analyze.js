@@ -197,10 +197,6 @@ module.exports = async function handler(req, res) {
         responseMimeType: 'application/json',
         maxOutputTokens: 8192,
         temperature: 0.7,
-        // gemini-2.5-flash spends output tokens on internal reasoning by
-        // default; left on, the budget is consumed before any answer is
-        // emitted and the response comes back empty.
-        thinkingConfig: { thinkingBudget: 0 },
       },
     }, GEMINI_TIMEOUT_MS);
     apiRes = out.res;
