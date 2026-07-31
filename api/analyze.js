@@ -58,18 +58,49 @@ module.exports = async function handler(req, res) {
   // deployed and whether the key is configured — without revealing the key.
   if (req.method === 'GET') {
     const key = process.env.GEMINI_API_KEY || '';
+    if (!key) {
+      res.status(200).json({
+        ok: false,
+        message: 'backend ทำงานปกติ ✅ แต่ยังไม่ได้ตั้ง API key ❌',
+        model: GEMINI_MODEL,
+        hasApiKey: false,
+        hint: 'ตั้ง GEMINI_API_KEY ใน Vercel → Settings → Environment Variables แล้วกด Redeploy',
+      });
+      return;
+    }
+
+    // Google has issued Gemini keys in more than one prefix format, so the
+    // only trustworthy check is a real (tiny) call against the API.
+    let keyWorks = false;
+    let detail = '';
+    try {
+      const probe = await fetch(`${GEMINI_API_URL}?key=${encodeURIComponent(key)}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        signal: AbortSignal.timeout(15000),
+        body: JSON.stringify({
+          contents: [{ role: 'user', parts: [{ text: 'ping' }] }],
+          generationConfig: { maxOutputTokens: 8, thinkingConfig: { thinkingBudget: 0 } },
+        }),
+      });
+      keyWorks = probe.ok;
+      if (!probe.ok) detail = (await probe.text().catch(() => '')).slice(0, 200);
+    } catch (e) {
+      detail = e && e.message ? e.message : String(e);
+    }
+
     res.status(200).json({
-      ok: true,
-      message: 'backend ทำงานปกติ ✅',
+      ok: keyWorks,
+      message: keyWorks
+        ? 'พร้อมใช้งานเต็มระบบ 🎉 backend + API key ทำงานได้จริง'
+        : 'backend ทำงานปกติ ✅ แต่ API key ใช้ไม่ได้ ❌',
       model: GEMINI_MODEL,
-      hasApiKey: !!key,
-      apiKeyLooksValid: key.startsWith('AIza'),
+      hasApiKey: true,
+      apiKeyWorks: keyWorks,
       apiKeyLength: key.length,
-      hint: !key
-        ? 'ยังไม่ได้ตั้ง GEMINI_API_KEY ใน Vercel → Settings → Environment Variables แล้วต้อง Redeploy'
-        : key.startsWith('AIza')
-          ? 'ตั้งค่าครบแล้ว พร้อมใช้งาน'
-          : 'มี key แต่รูปแบบไม่ใช่ของ Gemini (ต้องขึ้นต้นด้วย AIza) — ขอใหม่ที่ aistudio.google.com/apikey',
+      hint: keyWorks
+        ? 'ตั้งค่าครบแล้ว กลับไปหน้าเว็บแล้วกดวิเคราะห์ได้เลย'
+        : `Gemini ปฏิเสธ key นี้ — ${detail || 'ไม่ทราบสาเหตุ'}`,
     });
     return;
   }
