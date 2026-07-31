@@ -47,6 +47,37 @@ async function fetchLinkMeta(url) {
   }
 }
 
+// Google issues two credential styles for Gemini: classic API keys (AIza…)
+// authenticate via the ?key= query param, while the newer AQ.… keys are OAuth
+// access tokens and must go in an Authorization: Bearer header. Sending the
+// wrong style returns 401, so try the likely one first and fall back.
+async function callGemini(apiKey, payload, timeoutMs) {
+  const useBearerFirst = !apiKey.startsWith('AIza');
+  const attempts = useBearerFirst ? ['bearer', 'query'] : ['query', 'bearer'];
+  let last = null;
+
+  for (const mode of attempts) {
+    const url = mode === 'query'
+      ? `${GEMINI_API_URL}?key=${encodeURIComponent(apiKey)}`
+      : GEMINI_API_URL;
+    const headers = { 'content-type': 'application/json' };
+    if (mode === 'bearer') headers.authorization = `Bearer ${apiKey}`;
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers,
+      signal: AbortSignal.timeout(timeoutMs),
+      body: JSON.stringify(payload),
+    });
+
+    if (res.ok) return { res, mode };
+    last = { res, mode, body: await res.text().catch(() => '') };
+    // Only an auth rejection is worth retrying with the other style.
+    if (res.status !== 401 && res.status !== 403) break;
+  }
+  return { res: last.res, mode: last.mode, errorBody: last.body, failed: true };
+}
+
 function dataUrlToInlinePart(dataUrl) {
   const m = /^data:(image\/(?:png|jpeg|webp));base64,(.+)$/.exec(String(dataUrl || ''));
   if (!m) return null;
@@ -72,19 +103,16 @@ module.exports = async function handler(req, res) {
     // Google has issued Gemini keys in more than one prefix format, so the
     // only trustworthy check is a real (tiny) call against the API.
     let keyWorks = false;
+    let authMode = '';
     let detail = '';
     try {
-      const probe = await fetch(`${GEMINI_API_URL}?key=${encodeURIComponent(key)}`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        signal: AbortSignal.timeout(15000),
-        body: JSON.stringify({
-          contents: [{ role: 'user', parts: [{ text: 'ping' }] }],
-          generationConfig: { maxOutputTokens: 8, thinkingConfig: { thinkingBudget: 0 } },
-        }),
-      });
-      keyWorks = probe.ok;
-      if (!probe.ok) detail = (await probe.text().catch(() => '')).slice(0, 200);
+      const out = await callGemini(key, {
+        contents: [{ role: 'user', parts: [{ text: 'ping' }] }],
+        generationConfig: { maxOutputTokens: 8, thinkingConfig: { thinkingBudget: 0 } },
+      }, 15000);
+      keyWorks = !out.failed;
+      authMode = out.mode;
+      if (out.failed) detail = `HTTP ${out.res.status} ${(out.errorBody || '').slice(0, 180)}`;
     } catch (e) {
       detail = e && e.message ? e.message : String(e);
     }
@@ -98,6 +126,7 @@ module.exports = async function handler(req, res) {
       hasApiKey: true,
       apiKeyWorks: keyWorks,
       apiKeyLength: key.length,
+      authMode: authMode ? (authMode === 'bearer' ? 'Bearer header' : 'query param') : '',
       hint: keyWorks
         ? 'ตั้งค่าครบแล้ว กลับไปหน้าเว็บแล้วกดวิเคราะห์ได้เลย'
         : `Gemini ปฏิเสธ key นี้ — ${detail || 'ไม่ทราบสาเหตุ'}`,
@@ -160,24 +189,22 @@ module.exports = async function handler(req, res) {
   const parts = [{ text: `${instructions}\n\nข้อมูลร้าน:\n${contextLines}` }, ...imageParts];
 
   let apiRes;
+  let apiErrorBody = '';
   try {
-    apiRes = await fetch(`${GEMINI_API_URL}?key=${encodeURIComponent(apiKey)}`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
-      body: JSON.stringify({
-        contents: [{ role: 'user', parts }],
-        generationConfig: {
-          responseMimeType: 'application/json',
-          maxOutputTokens: 4096,
-          temperature: 0.7,
-          // gemini-2.5-flash spends output tokens on internal reasoning by
-          // default; left on, the budget is consumed before any answer is
-          // emitted and the response comes back empty.
-          thinkingConfig: { thinkingBudget: 0 },
-        },
-      }),
-    });
+    const out = await callGemini(apiKey, {
+      contents: [{ role: 'user', parts }],
+      generationConfig: {
+        responseMimeType: 'application/json',
+        maxOutputTokens: 4096,
+        temperature: 0.7,
+        // gemini-2.5-flash spends output tokens on internal reasoning by
+        // default; left on, the budget is consumed before any answer is
+        // emitted and the response comes back empty.
+        thinkingConfig: { thinkingBudget: 0 },
+      },
+    }, GEMINI_TIMEOUT_MS);
+    apiRes = out.res;
+    apiErrorBody = out.errorBody || '';
   } catch (e) {
     const msg = e && e.message ? e.message : String(e);
     res.status(502).json({ error: `เรียก Gemini API ไม่สำเร็จ: ${msg}${/timeout|abort/i.test(msg) ? ' (หมดเวลา — ลองลดจำนวนรูปที่แนบลง)' : ''}` });
@@ -185,10 +212,10 @@ module.exports = async function handler(req, res) {
   }
 
   if (!apiRes.ok) {
-    const errText = await apiRes.text().catch(() => '');
+    const errText = apiErrorBody || (await apiRes.text().catch(() => ''));
     let hint = '';
-    if (apiRes.status === 400 && /API key not valid/i.test(errText)) {
-      hint = ' — API key ไม่ถูกต้อง ตรวจว่าเป็น key จาก aistudio.google.com (ขึ้นต้นด้วย AIza)';
+    if (apiRes.status === 401 || /API key not valid|invalid authentication/i.test(errText)) {
+      hint = ' — key ใช้ไม่ได้ ลองสร้าง key ใหม่ที่ aistudio.google.com/apikey';
     } else if (apiRes.status === 403) {
       hint = ' — key ไม่มีสิทธิ์ใช้ Gemini API ลองสร้าง key ใหม่';
     } else if (apiRes.status === 429) {
